@@ -1,0 +1,207 @@
+import * as THREE from 'three';
+import { GAME_CONFIG } from '../config/gameConfig.js';
+
+// Builds the enclosed spy office: shell, props, lighting, and AABB colliders.
+// Returns { group, colliders: THREE.Box3[], bounds } for main.js.
+
+export function createOfficeRoom(scene) {
+  const { width: W, depth: D, height: H, wallThickness: T } = GAME_CONFIG.room;
+  const colliders = [];
+
+  const group = new THREE.Group();
+  group.name = 'OfficeRoom';
+  scene.add(group);
+
+  const std = (color, roughness, metalness = 0, extra = {}) =>
+    new THREE.MeshStandardMaterial({ color, roughness, metalness, ...extra });
+
+  const M = {
+    floor:   std(0x3a2e26, 0.8),
+    rug:     std(0x24344d, 0.95),
+    wall:    std(0x2c3e50, 0.95),
+    trim:    std(0x1a222e, 0.9),
+    ceiling: std(0x232a33, 0.95),
+    wood:    std(0x4a3527, 0.6),
+    woodDark:std(0x33241a, 0.65),
+    leather: std(0x14161a, 0.5),
+    dark:    std(0x11151c, 0.5, 0.3),
+    metal:   std(0x8a929c, 0.35, 0.8),
+    cabinet: std(0x39424e, 0.5, 0.6),
+    cabFront:std(0x2e3742, 0.55, 0.5),
+    paper:   std(0xe8e6df, 0.9),
+    plant:   std(0x2e5d3a, 0.9),
+    pot:     std(0x5a4632, 0.8),
+    fixture: std(0xf7f3e8, 0.5, 0, { emissive: 0xfff3d8, emissiveIntensity: 1.6 }),
+    window:  std(0x0a1526, 0.4, 0, { emissive: 0x1d3a5f, emissiveIntensity: 1.1 }),
+    blind:   std(0x39424e, 0.7),
+    screen:  std(0x06121f, 0.3, 0, { emissive: 0x3fa9f5, emissiveIntensity: 1.3 }),
+    bulb:    std(0xfff1cf, 0.4, 0, { emissive: 0xffd9a0, emissiveIntensity: 2.0 }),
+  };
+
+  const addBox = (w, h, d, mat, x, y, z, parent = group) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.set(x, y, z);
+    m.receiveShadow = true;
+    parent.add(m);
+    return m;
+  };
+  const addCollider = (cx, cz, sx, sz, h) => colliders.push(new THREE.Box3(
+    new THREE.Vector3(cx - sx / 2, 0, cz - sz / 2),
+    new THREE.Vector3(cx + sx / 2, h, cz + sz / 2),
+  ));
+
+  // ── Shell (walls/ceiling receive shadows but don't cast, so the "moonlight"
+  //    directional light can shine into the room from outside) ──────────────
+  addBox(W, 0.1, D, M.floor, 0, -0.05, 0);
+  addBox(5.2, 0.02, 3.6, M.rug, 0, 0.011, -2.9);
+  addBox(W, 0.1, D, M.ceiling, 0, H + 0.05, 0);
+  addBox(W, H, T, M.wall, 0, H / 2, -D / 2); // north
+  addBox(W, H, T, M.wall, 0, H / 2,  D / 2); // south
+  addBox(T, H, D, M.wall, -W / 2, H / 2, 0); // west
+  addBox(T, H, D, M.wall,  W / 2, H / 2, 0); // east
+  // Baseboards
+  addBox(W, 0.12, 0.04, M.trim, 0, 0.06, -D / 2 + T / 2 + 0.02);
+  addBox(W, 0.12, 0.04, M.trim, 0, 0.06,  D / 2 - T / 2 - 0.02);
+  addBox(0.04, 0.12, D, M.trim, -W / 2 + T / 2 + 0.02, 0.06, 0);
+  addBox(0.04, 0.12, D, M.trim,  W / 2 - T / 2 - 0.02, 0.06, 0);
+
+  // Night window with venetian blinds (north wall, spy-noir vibe).
+  addBox(3.6, 1.9, 0.06, M.trim, 0, 2.15, -D / 2 + T / 2 + 0.02);
+  addBox(3.4, 1.7, 0.02, M.window, 0, 2.15, -D / 2 + T / 2 + 0.05);
+  for (let i = 0; i < 6; i++) {
+    const slat = addBox(3.4, 0.055, 0.03, M.blind, 0, 1.45 + i * 0.28, -D / 2 + T / 2 + 0.09);
+    slat.rotation.x = 0.45;
+  }
+
+  // Door (east wall, decorative — wall stays solid).
+  addBox(0.06, 2.1, 1.05, M.dark, W / 2 - T / 2 - 0.02, 1.05, 3.0);
+  const handle = new THREE.Mesh(new THREE.SphereGeometry(0.035, 12, 10), M.metal);
+  handle.position.set(W / 2 - T / 2 - 0.07, 1.05, 2.6);
+  group.add(handle);
+
+  // Ceiling light fixtures.
+  addBox(1.3, 0.06, 0.45, M.fixture, -3.5, H - 0.03, 0);
+  addBox(1.3, 0.06, 0.45, M.fixture,  3.5, H - 0.03, 0);
+
+  // ── Props (all cast + receive shadows) ────────────────────────────────────
+  const props = new THREE.Group();
+  group.add(props);
+
+  // Executive desk
+  const desk = new THREE.Group();
+  desk.position.set(0, 0, -3.2);
+  props.add(desk);
+  addBox(2.4, 0.07, 1.1, M.wood, 0, 0.755, 0, desk);
+  addBox(0.5, 0.72, 1.0, M.woodDark, -0.9, 0.36, 0, desk);
+  addBox(0.5, 0.72, 1.0, M.woodDark,  0.9, 0.36, 0, desk);
+  addBox(1.3, 0.5, 0.05, M.woodDark, 0, 0.45, -0.45, desk);
+  for (const px of [-0.9, 0.9]) for (const hy of [0.18, 0.40, 0.62])
+    addBox(0.16, 0.02, 0.02, M.metal, px, hy, 0.51, desk);
+  addBox(0.21, 0.005, 0.29, M.paper, 0.30, 0.795, 0.15, desk).rotation.y = 0.2;
+  addBox(0.21, 0.005, 0.29, M.paper, 0.36, 0.800, 0.12, desk).rotation.y = -0.1;
+
+  // Monitor (screen faces the chair) + keyboard
+  const monitor = new THREE.Group();
+  monitor.position.set(-0.35, 0.79, -0.15);
+  monitor.rotation.y = Math.PI;
+  desk.add(monitor);
+  addBox(0.22, 0.02, 0.16, M.dark, 0, 0.01, 0, monitor);
+  addBox(0.04, 0.18, 0.04, M.dark, 0, 0.10, 0, monitor);
+  addBox(0.64, 0.40, 0.035, M.dark, 0, 0.32, 0, monitor);
+  addBox(0.60, 0.36, 0.01, M.screen, 0, 0.32, 0.022, monitor);
+  addBox(0.42, 0.02, 0.15, M.dark, -0.35, 0.795, -0.42, desk);
+
+  // Desk lamp with warm point light
+  const lamp = new THREE.Group();
+  lamp.position.set(0.85, 0.79, -0.25);
+  desk.add(lamp);
+  const lampBase = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, 0.03, 16), M.dark);
+  lampBase.position.y = 0.015; lamp.add(lampBase);
+  const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.42, 10), M.dark);
+  arm.position.set(-0.08, 0.21, 0); arm.rotation.z = 0.4; lamp.add(arm);
+  const head = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.14, 16), M.dark);
+  head.position.set(-0.16, 0.42, 0); head.rotation.z = 2.2; lamp.add(head);
+  const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.03, 10, 8), M.bulb);
+  bulb.position.set(-0.16, 0.38, 0); lamp.add(bulb);
+  const lampLight = new THREE.PointLight(0xffc98a, 7, 6, 2);
+  lampLight.position.set(-0.16, 0.36, 0); lamp.add(lampLight);
+  addCollider(0, -3.2, 2.5, 1.15, 0.85);
+
+  // Executive chair
+  const chair = new THREE.Group();
+  chair.position.set(0.15, 0, -4.35);
+  chair.rotation.y = 0.35;
+  props.add(chair);
+  const chairBase = new THREE.Mesh(new THREE.CylinderGeometry(0.30, 0.34, 0.04, 16), M.dark);
+  chairBase.position.y = 0.03; chair.add(chairBase);
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.36, 10), M.metal);
+  post.position.y = 0.23; chair.add(post);
+  addBox(0.55, 0.09, 0.52, M.leather, 0, 0.46, 0, chair);
+  addBox(0.52, 0.68, 0.09, M.leather, 0, 0.82, -0.26, chair).rotation.x = -0.1;
+  addBox(0.06, 0.05, 0.40, M.leather, -0.30, 0.60, 0, chair);
+  addBox(0.06, 0.05, 0.40, M.leather,  0.30, 0.60, 0, chair);
+  addCollider(0.15, -4.35, 0.8, 0.8, 1.2);
+
+  // Filing cabinets (west wall, drawers face into the room)
+  for (const cz of [-4.55, -3.8]) {
+    const cab = new THREE.Group();
+    cab.position.set(-7.45, 0, cz);
+    cab.rotation.y = Math.PI / 2;
+    props.add(cab);
+    addBox(0.62, 1.32, 0.58, M.cabinet, 0, 0.66, 0, cab);
+    for (let i = 0; i < 3; i++) {
+      addBox(0.56, 0.34, 0.02, M.cabFront, 0, 0.25 + i * 0.4, 0.30, cab);
+      addBox(0.18, 0.03, 0.02, M.metal, 0, 0.32 + i * 0.4, 0.315, cab);
+    }
+    addCollider(-7.45, cz, 0.62, 0.62, 1.35);
+  }
+
+  // Credenza + plant + books (east wall)
+  const cred = new THREE.Group();
+  cred.position.set(7.5, 0, 1.4);
+  cred.rotation.y = -Math.PI / 2;
+  props.add(cred);
+  addBox(1.9, 0.8, 0.55, M.woodDark, 0, 0.4, 0, cred);
+  addBox(2.0, 0.04, 0.60, M.wood, 0, 0.82, 0, cred);
+  addBox(0.85, 0.6, 0.02, M.wood, -0.47, 0.4, 0.29, cred);
+  addBox(0.85, 0.6, 0.02, M.wood,  0.47, 0.4, 0.29, cred);
+  const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.14, 0.18, 14), M.pot);
+  pot.position.set(0.6, 0.93, 0); cred.add(pot);
+  const foliage = new THREE.Mesh(new THREE.SphereGeometry(0.2, 14, 12), M.plant);
+  foliage.position.set(0.6, 1.2, 0); foliage.scale.set(1, 1.25, 1); cred.add(foliage);
+  addBox(0.16, 0.22, 0.12, std(0x5b3a3a, 0.8), -0.55, 0.95, 0, cred);
+  addBox(0.14, 0.18, 0.12, std(0x2f4a6b, 0.8), -0.38, 0.93, 0, cred);
+  addCollider(7.5, 1.4, 0.65, 2.05, 0.9);
+
+  props.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+
+  // ── Lighting: cool "moonlight" key + warm interior fills ─────────────────
+  scene.add(new THREE.HemisphereLight(0x8fb4e8, 0x2a2320, 0.5));
+  scene.add(new THREE.AmbientLight(0xffffff, 0.22));
+
+  const dir = new THREE.DirectionalLight(0xbfd6ff, 1.7);
+  dir.position.set(-4, 7.5, -5);
+  dir.castShadow = true;
+  dir.shadow.mapSize.set(GAME_CONFIG.render.shadowMapSize, GAME_CONFIG.render.shadowMapSize);
+  dir.shadow.camera.left = -11; dir.shadow.camera.right = 11;
+  dir.shadow.camera.top = 11;   dir.shadow.camera.bottom = -11;
+  dir.shadow.camera.near = 1;   dir.shadow.camera.far = 30;
+  dir.shadow.bias = -0.0004;
+  dir.shadow.normalBias = 0.03;
+  dir.target.position.set(1.5, 0, 1.5);
+  scene.add(dir, dir.target);
+
+  for (const px of [-3.5, 3.5]) {
+    const p = new THREE.PointLight(0xffe9c8, 26, 15, 2);
+    p.position.set(px, 3.5, 0);
+    scene.add(p);
+  }
+
+  const halfX = W / 2 - T / 2;
+  const halfZ = D / 2 - T / 2;
+  return {
+    group,
+    colliders,
+    bounds: { minX: -halfX, maxX: halfX, minZ: -halfZ, maxZ: halfZ },
+  };
+}

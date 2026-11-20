@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent Smith — Spy Office Prototype</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0f1a;
+      font-family: system-ui, "Segoe UI", Roboto, sans-serif; }
+    #app canvas { display: block; }
+    .hud { position: fixed; pointer-events: none; color: #d7e1ee; user-select: none; z-index: 10; }
+    #hud-top { top: 16px; left: 16px; }
+    #hud-top h1 { margin: 0 0 8px; font-size: 15px; letter-spacing: 2px; color: #ffffff; }
+    #hud-top p { margin: 3px 0; font-size: 12px; opacity: .85; }
+    kbd { background: #1c2735; border: 1px solid #33445c; border-bottom-width: 2px;
+      border-radius: 4px; padding: 1px 6px; font-size: 11px; font-family: inherit; }
+    #hud-status { left: 16px; bottom: 14px; font-size: 12px; opacity: .85; }
+    #hud-status b { color: #7fd1ff; letter-spacing: 1px; }
+  </style>
+
+  <!-- Native ES Modules + CDN importmap: no bundler needed, Vercel-ready -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="app"></div>
+
+  <div class="hud" id="hud-top">
+    <h1>AGENT SMITH &middot; OFFICE PROTOTYPE</h1>
+    <p><kbd>W</kbd>/<kbd>&uarr;</kbd> forward &nbsp;&middot;&nbsp; <kbd>S</kbd>/<kbd>&darr;</kbd> backward</p>
+    <p><kbd>A</kbd>/<kbd>&larr;</kbd> turn left &nbsp;&middot;&nbsp; <kbd>D</kbd>/<kbd>&rarr;</kbd> turn right</p>
+    <p><kbd>Shift</kbd> + move = sprint</p>
+  </div>
+
+  <div class="hud" id="hud-status">
+    STATE: <b id="hud-state">IDLE</b> &nbsp;&middot;&nbsp; NET: <span id="hud-net">offline (stub)</span>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,69 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// NetworkSync — Phase 1: dependency-free stub (single-player, zero cost).
+// Phase 2: uncomment the Supabase blocks below, add your URL/anon key in
+// gameConfig.js, set network.enabled = true. Nothing else in the game changes:
+// main.js already broadcasts at a fixed tick rate and renders remote agents.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// PHASE 2 IMPORT (CDN ESM, still no bundler needed):
+// import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+export class NetworkSync {
+  constructor(config = {}) {
+    this.config = config;
+    this.enabled = !!config.enabled;
+    this.playerId = (globalThis.crypto && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : 'p-' + Math.random().toString(36).slice(2, 10);
+    this._listeners = new Set();
+    this._channel = null;
+  }
+
+  async connect() {
+    if (!this.enabled) return false;
+
+    /* ── PHASE 2: SUPABASE REALTIME WIRING ──────────────────────────────────
+    const supabase = createClient(this.config.supabaseUrl, this.config.supabaseAnonKey);
+    this._channel = supabase.channel(this.config.channelName, {
+      config: { broadcast: { self: false } },
+    });
+    this._channel.on('broadcast', { event: 'player_state' }, ({ payload }) => {
+      this._emit(payload); // -> main.js creates/updates remote AgentSmith
+    });
+    await this._channel.subscribe();
+    return true;
+    ──────────────────────────────────────────────────────────────────────── */
+
+    console.info('[NetworkSync] enabled=true, but Supabase wiring is still commented out.');
+    return false;
+  }
+
+  /** Called ~tickRate times/sec by main.js with the local player's state. */
+  broadcastState(state) {
+    if (!this.enabled || !this._channel) return; // no-op in Phase 1
+
+    /* ── PHASE 2 ────────────────────────────────────────────────────────────
+    this._channel.send({
+      type: 'broadcast',
+      event: 'player_state',
+      payload: { id: this.playerId, ...state },
+    });
+    ──────────────────────────────────────────────────────────────────────── */
+  }
+
+  /** Subscribe to remote player states. Returns an unsubscribe function. */
+  onRemotePlayerUpdate(callback) {
+    this._listeners.add(callback);
+    return () => this._listeners.delete(callback);
+  }
+
+  _emit(payload) {
+    for (const cb of this._listeners) cb(payload);
+  }
+
+  disconnect() {
+    // PHASE 2: this._channel?.unsubscribe();
+    this._channel = null;
+    this._listeners.clear();
+  }
+}

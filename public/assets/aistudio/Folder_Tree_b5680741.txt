@@ -1,0 +1,14 @@
+agent-smith-prototype/
+├── index.html
+└── src/
+    ├── main.js
+    ├── config/
+    │   └── gameConfig.js
+    ├── scene/
+    │   └── officeRoom.js
+    ├── character/
+    │   └── agentSmith.js
+    ├── controls/
+    │   └── inputController.js
+    └── network/
+        └── networkSync.js

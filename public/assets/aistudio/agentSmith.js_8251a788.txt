@@ -1,0 +1,230 @@
+import * as THREE from 'three';
+import { GAME_CONFIG } from '../config/gameConfig.js';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AgentSmith: articulated, procedurally-animated spy character.
+// Fully decoupled from input/network. Drive it ONLY through:
+//   setTransform(position, rotationY)
+//   setAnimationState('idle' | 'walk' | 'run' [, direction])
+//   update(dt)
+// The exact same class renders the local player AND future remote players.
+// Model faces +Z at rotationY = 0. Origin is at the feet.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const POSE_TARGETS = {
+  idle: { swing: 0,    arm: 0,   knee: 0,    bob: 0,     lean: 0.02, freq: 0,                                elbow: 0.15 },
+  walk: { swing: 0.55, arm: 0.4, knee: 0.7,  bob: 0.03,  lean: 0.06, freq: GAME_CONFIG.animation.walkFrequency, elbow: 0.30 },
+  run:  { swing: 0.95, arm: 0.8, knee: 1.25, bob: 0.055, lean: 0.16, freq: GAME_CONFIG.animation.runFrequency,  elbow: 1.05 },
+};
+
+function makeMaterials() {
+  const std = (color, roughness, metalness = 0) =>
+    new THREE.MeshStandardMaterial({ color, roughness, metalness });
+  return {
+    suit:      std(0x23252d, 0.80),        // charcoal tailored jacket
+    suitDark:  std(0x191b21, 0.75),        // lapels / buttons
+    trouser:   std(0x1f2128, 0.85),
+    shirt:     std(0xf4f6f8, 0.60),
+    tie:       std(0x0c0d11, 0.45),
+    skin:      std(0xd8a284, 0.65),
+    stubble:   std(0xb28468, 0.90),        // light stubble jaw tone
+    hair:      std(0x171310, 0.90),
+    shoe:      std(0x0b0b0e, 0.28, 0.15),  // polished dress shoes
+    eye:       std(0x14100c, 0.30),
+    watchBand: std(0x9aa2ad, 0.30, 0.90),
+    watchFace: std(0x0e141c, 0.20, 0.40),
+  };
+}
+
+function part(geo, mat, x = 0, y = 0, z = 0) {
+  const m = new THREE.Mesh(geo, mat);
+  m.position.set(x, y, z);
+  m.castShadow = true;
+  return m;
+}
+const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
+const sph = (r) => new THREE.SphereGeometry(r, 20, 16);
+const cyl = (rt, rb, h) => new THREE.CylinderGeometry(rt, rb, h, 16);
+
+export class AgentSmith {
+  constructor() {
+    this.group = new THREE.Group();
+    this.group.name = 'AgentSmith';
+
+    this._state = 'idle';
+    this._direction = 1;      // 1 forward, -1 backward (reverses gait phase)
+    this._phase = 0;
+    this._time = 0;
+    this._pelvisBaseY = 0.98;
+    this._pose = { ...POSE_TARGETS.idle };
+
+    this._build();
+  }
+
+  // ── Public, network-friendly API ──────────────────────────────────────────
+  setTransform(position, rotationY) {
+    this.group.position.copy(position);
+    this.group.rotation.y = rotationY;
+  }
+
+  getTransform() {
+    return { position: this.group.position.clone(), rotationY: this.group.rotation.y };
+  }
+
+  setAnimationState(state, direction = 1) {
+    if (POSE_TARGETS[state]) this._state = state;
+    this._direction = direction >= 0 ? 1 : -1;
+  }
+
+  // ── Procedural animation (call once per frame) ────────────────────────────
+  update(dt) {
+    const target = POSE_TARGETS[this._state];
+    const k = 1 - Math.exp(-GAME_CONFIG.animation.blendSpeed * dt);
+    for (const key in this._pose) this._pose[key] += (target[key] - this._pose[key]) * k;
+
+    this._time += dt;
+    this._phase += this._pose.freq * dt * this._direction;
+
+    const p = this._pose;
+    const s = Math.sin(this._phase);
+    const c = Math.cos(this._phase);
+    const move = Math.min(1, p.swing / 0.55); // 0 = idle, 1 = moving
+    const idleW = 1 - move;
+    const j = this._j;
+
+    // Legs: thighs swing, knees bend on the swing phase, feet stay level-ish.
+    j.hipL.rotation.x = s * p.swing;
+    j.hipR.rotation.x = -s * p.swing;
+    j.kneeL.rotation.x = Math.max(0, -Math.sin(this._phase - 0.6)) * p.knee + 0.06;
+    j.kneeR.rotation.x = Math.max(0, -Math.sin(this._phase + Math.PI - 0.6)) * p.knee + 0.06;
+    j.footL.rotation.x = -(j.hipL.rotation.x + j.kneeL.rotation.x) * 0.45;
+    j.footR.rotation.x = -(j.hipR.rotation.x + j.kneeR.rotation.x) * 0.45;
+
+    // Arms counter-swing; elbows bend more when running.
+    j.shoulderL.rotation.x = -s * p.arm + Math.sin(this._time * 1.8) * 0.02 * idleW;
+    j.shoulderR.rotation.x =  s * p.arm + Math.sin(this._time * 1.8 + 1) * 0.02 * idleW;
+    j.shoulderL.rotation.z = 0.07;
+    j.shoulderR.rotation.z = -0.07;
+    j.elbowL.rotation.x = p.elbow + Math.max(0, s) * 0.3 * move;
+    j.elbowR.rotation.x = p.elbow + Math.max(0, -s) * 0.3 * move;
+
+    // Torso lean + counter-twist; head stabilizes and idly scans the room.
+    j.torso.rotation.x = p.lean;
+    j.torso.rotation.y = s * 0.07 * move;
+    j.head.rotation.y = -s * 0.05 * move + Math.sin(this._time * 0.6) * 0.08 * idleW;
+    j.head.rotation.x = -p.lean * 0.5 + Math.sin(this._time * 0.9) * 0.02 * idleW;
+
+    // Pelvis bob while moving + subtle breathing while idle.
+    j.pelvis.position.y = this._pelvisBaseY
+      + Math.abs(c) * p.bob
+      + Math.sin(this._time * 1.8) * 0.008 * idleW;
+  }
+
+  // ── Mesh construction (stylized-realistic, ~1.85 m tall) ──────────────────
+  _build() {
+    const M = makeMaterials();
+    const j = {};
+    this._j = j;
+
+    // Pelvis (everything hangs off this so the whole body can bob).
+    j.pelvis = new THREE.Group();
+    j.pelvis.position.y = this._pelvisBaseY;
+    this.group.add(j.pelvis);
+    j.pelvis.add(part(box(0.34, 0.16, 0.21), M.trouser, 0, -0.05, 0)); // hips
+    j.pelvis.add(part(box(0.41, 0.14, 0.235), M.suit, 0, 0, 0));       // jacket skirt
+
+    // Torso (lean/twist pivot at the waist).
+    j.torso = new THREE.Group();
+    j.torso.position.set(0, 0.02, 0);
+    j.pelvis.add(j.torso);
+    j.torso.add(part(box(0.42, 0.54, 0.24), M.suit, 0, 0.27, 0));      // jacket
+    j.torso.add(part(box(0.17, 0.32, 0.02), M.shirt, 0, 0.40, 0.118)); // shirt front
+    const lapelL = part(box(0.075, 0.30, 0.016), M.suitDark, -0.08, 0.40, 0.126);
+    const lapelR = part(box(0.075, 0.30, 0.016), M.suitDark,  0.08, 0.40, 0.126);
+    lapelL.rotation.z = 0.32; lapelR.rotation.z = -0.32;
+    j.torso.add(lapelL, lapelR);
+    const colL = part(box(0.07, 0.03, 0.02), M.shirt, -0.05, 0.545, 0.10);
+    const colR = part(box(0.07, 0.03, 0.02), M.shirt,  0.05, 0.545, 0.10);
+    colL.rotation.z = 0.5; colR.rotation.z = -0.5;
+    j.torso.add(colL, colR);
+    j.torso.add(part(box(0.06, 0.05, 0.03), M.tie, 0, 0.51, 0.128));   // tie knot
+    const tie = part(box(0.055, 0.28, 0.018), M.tie, 0, 0.345, 0.126); // tie body
+    tie.rotation.x = 0.04;
+    j.torso.add(tie);
+    j.torso.add(part(sph(0.012), M.suitDark, 0, 0.13, 0.122));         // buttons
+    j.torso.add(part(sph(0.012), M.suitDark, 0, 0.06, 0.122));
+    j.torso.add(part(box(0.05, 0.022, 0.012), M.shirt, -0.13, 0.43, 0.122)); // pocket square
+    j.torso.add(part(cyl(0.045, 0.05, 0.09), M.skin, 0, 0.565, 0));    // neck
+
+    // Head: skull + stubble jaw + styled dark hair + simple face.
+    j.head = new THREE.Group();
+    j.head.position.set(0, 0.60, 0);
+    j.torso.add(j.head);
+    const skull = part(sph(0.115), M.skin, 0, 0.10, 0);
+    skull.scale.set(1, 1.15, 1.05);
+    const jaw = part(sph(0.105), M.stubble, 0, 0.035, 0.012);
+    jaw.scale.set(0.95, 0.8, 0.95);
+    const hair = part(sph(0.12), M.hair, 0, 0.155, -0.018);
+    hair.scale.set(1.04, 0.9, 1.04);
+    const quiff = part(box(0.15, 0.045, 0.09), M.hair, 0, 0.235, 0.055);
+    quiff.rotation.x = -0.35;
+    j.head.add(skull, jaw, hair, quiff);
+    j.head.add(part(sph(0.014), M.eye, -0.045, 0.115, 0.108));
+    j.head.add(part(sph(0.014), M.eye,  0.045, 0.115, 0.108));
+    j.head.add(part(box(0.048, 0.009, 0.012), M.hair, -0.045, 0.148, 0.110));
+    j.head.add(part(box(0.048, 0.009, 0.012), M.hair,  0.045, 0.148, 0.110));
+    j.head.add(part(box(0.022, 0.038, 0.03), M.skin, 0, 0.085, 0.118)); // nose
+    j.head.add(part(sph(0.02), M.skin, -0.113, 0.10, 0));               // ears
+    j.head.add(part(sph(0.02), M.skin,  0.113, 0.10, 0));
+
+    // Arms (character-left = +X). Watch on the LEFT wrist.
+    for (const side of [{ s: 1, n: 'L' }, { s: -1, n: 'R' }]) {
+      const shoulder = new THREE.Group();
+      shoulder.position.set(side.s * 0.245, 0.47, 0);
+      j.torso.add(shoulder);
+      shoulder.add(part(sph(0.075), M.suit));                            // shoulder pad
+      shoulder.add(part(box(0.095, 0.30, 0.105), M.suit, 0, -0.15, 0));  // upper sleeve
+
+      const elbow = new THREE.Group();
+      elbow.position.set(0, -0.30, 0);
+      shoulder.add(elbow);
+      elbow.add(part(box(0.082, 0.26, 0.09), M.suit, 0, -0.13, 0));      // forearm sleeve
+      elbow.add(part(cyl(0.046, 0.046, 0.035), M.shirt, 0, -0.265, 0));  // white cuff
+      const hand = part(sph(0.045), M.skin, 0, -0.315, 0);
+      hand.scale.set(0.9, 1.2, 0.7);
+      elbow.add(hand);
+
+      if (side.n === 'L') {
+        const band = part(new THREE.TorusGeometry(0.05, 0.011, 10, 20), M.watchBand, 0, -0.245, 0);
+        band.rotation.x = Math.PI / 2;
+        const face = part(cyl(0.021, 0.021, 0.01), M.watchFace, 0, -0.245, 0.052);
+        face.rotation.x = Math.PI / 2;
+        elbow.add(band, face);
+      }
+      j['shoulder' + side.n] = shoulder;
+      j['elbow' + side.n] = elbow;
+    }
+
+    // Legs + dress shoes. Feet rest exactly at y = 0.
+    for (const side of [{ s: 1, n: 'L' }, { s: -1, n: 'R' }]) {
+      const hip = new THREE.Group();
+      hip.position.set(side.s * 0.105, -0.02, 0);
+      j.pelvis.add(hip);
+      hip.add(part(box(0.135, 0.44, 0.145), M.trouser, 0, -0.22, 0)); // thigh
+
+      const knee = new THREE.Group();
+      knee.position.set(0, -0.44, 0);
+      hip.add(knee);
+      knee.add(part(box(0.115, 0.45, 0.125), M.trouser, 0, -0.225, 0)); // shin
+
+      const foot = new THREE.Group();
+      foot.position.set(0, -0.45, 0);
+      knee.add(foot);
+      foot.add(part(box(0.12, 0.07, 0.27), M.shoe, 0, -0.035, 0.055)); // shoe (toe +Z)
+
+      j['hip' + side.n] = hip;
+      j['knee' + side.n] = knee;
+      j['foot' + side.n] = foot;
+    }
+  }
+}

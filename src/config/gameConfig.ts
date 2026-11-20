@@ -1,0 +1,51 @@
+// Central tuning values. Tweak gameplay here without touching logic files.
+export const GAME_CONFIG = {
+  room: {
+    width: 16,          // X axis (meters)
+    depth: 12,          // Z axis (meters)
+    height: 4,
+    wallThickness: 0.2,
+  },
+
+  player: {
+    radius: 0.35,       // collision circle radius
+    walkSpeed: 2.3,     // m/s
+    runSpeed: 4.8,      // m/s (Shift)
+    backwardFactor: 0.6,
+    turnSpeed: 2.6,     // rad/s
+    spawn: { x: 0, y: 0, z: 2.2, rotationY: Math.PI }, // facing the desk
+  },
+
+  camera: {
+    fov: 60,
+    distance: 4.2,      // behind the agent
+    height: 2.15,
+    lookAtHeight: 1.45,
+    followSmoothing: 6.5, // exponential damping factor
+    wallMargin: 0.3,      // keep camera inside the room
+  },
+
+  animation: {
+    walkFrequency: 7.5,  // rad/s of the procedural gait phase
+    runFrequency: 11.5,
+    blendSpeed: 12,      // idle <-> walk <-> run smoothing
+  },
+
+  render: {
+    maxPixelRatio: 2,
+    shadowMapSize: 2048,
+  },
+
+  // ─────────────────────────────────────────────────────────────
+  // PHASE 2 — SUPABASE REALTIME (placeholder, safe to commit)
+  // Set enabled: true only AFTER wiring networkSync.ts.
+  // Use the PUBLIC anon key here (never the service_role key).
+  // ─────────────────────────────────────────────────────────────
+  network: {
+    enabled: false,
+    tickRate: 10,                       // broadcasts per second
+    channelName: 'spy-office:room-01',
+    supabaseUrl: 'YOUR_SUPABASE_URL',
+    supabaseAnonKey: 'YOUR_SUPABASE_ANON_KEY',
+  },
+} as const;

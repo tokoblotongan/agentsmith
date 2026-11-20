@@ -1,0 +1,6 @@
+{
+  "name": "Agent Smith — Spy Office Prototype",
+  "description": "Modular 3D spy office prototype featuring Agent Smith with procedural animation, collisions, and third-person camera.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

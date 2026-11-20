@@ -1,0 +1,191 @@
+import * as THREE from 'three';
+import { GAME_CONFIG } from './config/gameConfig.js';
+import { createOfficeRoom } from './scene/officeRoom.js';
+import { AgentSmith } from './character/agentSmith.js';
+import { InputController } from './controls/inputController.js';
+import { NetworkSync } from './network/networkSync.js';
+
+// ── Renderer / scene / camera ────────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, GAME_CONFIG.render.maxPixelRatio));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.getElementById('app').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0f1a);
+
+const camera = new THREE.PerspectiveCamera(
+  GAME_CONFIG.camera.fov, window.innerWidth / window.innerHeight, 0.1, 100);
+
+// ── World, local player, input, network ─────────────────────────────────────
+const room = createOfficeRoom(scene);
+const input = new InputController();
+const network = new NetworkSync(GAME_CONFIG.network);
+network.connect();
+document.getElementById('hud-net').textContent = network.enabled ? 'online' : 'offline (stub)';
+
+const spawn = GAME_CONFIG.player.spawn;
+const position = new THREE.Vector3(spawn.x, spawn.y, spawn.z);
+let rotationY = spawn.rotationY;
+
+const localPlayer = new AgentSmith();
+scene.add(localPlayer.group);
+localPlayer.setTransform(position, rotationY);
+
+// ── Remote players (idle in Phase 1; fully functional once Supabase is on) ──
+const remotes = new Map(); // id -> { agent, current: Vector3, currentRot, target: Vector3, targetRot }
+network.onRemotePlayerUpdate((msg) => {
+  if (!msg || msg.id === network.playerId) return;
+  let r = remotes.get(msg.id);
+  if (!r) {
+    const agent = new AgentSmith();
+    scene.add(agent.group);
+    r = {
+      agent,
+      current: new THREE.Vector3(msg.position.x, msg.position.y, msg.position.z),
+      currentRot: msg.rotationY,
+      target: new THREE.Vector3(),
+      targetRot: msg.rotationY,
+    };
+    remotes.set(msg.id, r);
+  }
+  r.target.set(msg.position.x, msg.position.y, msg.position.z);
+  r.targetRot = msg.rotationY;
+  r.agent.setAnimationState(msg.animationState ?? 'idle');
+});
+
+// ── Collision: circle (player) vs AABBs (furniture) + room bounds ───────────
+function resolveCircleBox(pos, radius, b) {
+  const cx = Math.max(b.min.x, Math.min(pos.x, b.max.x));
+  const cz = Math.max(b.min.z, Math.min(pos.z, b.max.z));
+  const dx = pos.x - cx, dz = pos.z - cz;
+  const d2 = dx * dx + dz * dz;
+  if (d2 >= radius * radius) return;
+  if (d2 > 1e-8) {
+    const d = Math.sqrt(d2);
+    const push = (radius - d) / d;
+    pos.x += dx * push;
+    pos.z += dz * push;
+  } else {
+    // Center inside the box: exit through the nearest face.
+    const exits = [
+      pos.x - b.min.x + radius, b.max.x - pos.x + radius,
+      pos.z - b.min.z + radius, b.max.z - pos.z + radius,
+    ];
+    const m = Math.min(...exits);
+    if (m === exits[0]) pos.x = b.min.x - radius;
+    else if (m === exits[1]) pos.x = b.max.x + radius;
+    else if (m === exits[2]) pos.z = b.min.z - radius;
+    else pos.z = b.max.z + radius;
+  }
+}
+
+function resolveCollisions(pos) {
+  const r = GAME_CONFIG.player.radius;
+  const { minX, maxX, minZ, maxZ } = room.bounds;
+  pos.x = Math.max(minX + r, Math.min(pos.x, maxX - r));
+  pos.z = Math.max(minZ + r, Math.min(pos.z, maxZ - r));
+  for (const b of room.colliders) resolveCircleBox(pos, r, b);
+}
+
+// ── Third-person follow camera ───────────────────────────────────────────────
+const camCfg = GAME_CONFIG.camera;
+const camTargetPos = new THREE.Vector3();
+const lookTarget = new THREE.Vector3();
+
+function computeCameraTarget() {
+  const fx = Math.sin(rotationY), fz = Math.cos(rotationY);
+  camTargetPos.set(
+    position.x - fx * camCfg.distance,
+    camCfg.height,
+    position.z - fz * camCfg.distance,
+  );
+  const m = camCfg.wallMargin;
+  camTargetPos.x = Math.max(room.bounds.minX + m, Math.min(camTargetPos.x, room.bounds.maxX - m));
+  camTargetPos.z = Math.max(room.bounds.minZ + m, Math.min(camTargetPos.z, room.bounds.maxZ - m));
+  camTargetPos.y = Math.max(0.6, Math.min(camTargetPos.y, GAME_CONFIG.room.height - 0.25));
+}
+computeCameraTarget();
+camera.position.copy(camTargetPos); // no first-frame swoop
+
+function dampAngle(a, b, k) {
+  let d = (b - a) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return a + d * k;
+}
+
+// ── Main loop ────────────────────────────────────────────────────────────────
+const clock = new THREE.Clock();
+const hudState = document.getElementById('hud-state');
+let lastAnimState = 'idle';
+let netAccumulator = 0;
+const netInterval = 1 / GAME_CONFIG.network.tickRate;
+
+function frame() {
+  requestAnimationFrame(frame);
+  const dt = Math.min(clock.getDelta(), 0.05); // clamp tab-switch spikes
+  const P = GAME_CONFIG.player;
+
+  // 1) Input -> simulation (the ONLY place keyboard touches gameplay)
+  const intent = input.getIntent();
+  rotationY += intent.turn * P.turnSpeed * dt;
+
+  let speed = intent.sprint ? P.runSpeed : P.walkSpeed;
+  if (intent.forward < 0) speed *= P.backwardFactor;
+  position.x += Math.sin(rotationY) * intent.forward * speed * dt;
+  position.z += Math.cos(rotationY) * intent.forward * speed * dt;
+  resolveCollisions(position);
+
+  // 2) Drive the character through its decoupled API
+  const animState = intent.forward !== 0 ? (intent.sprint ? 'run' : 'walk') : 'idle';
+  localPlayer.setTransform(position, rotationY);
+  localPlayer.setAnimationState(animState, intent.forward < 0 ? -1 : 1);
+  localPlayer.update(dt);
+  if (animState !== lastAnimState) {
+    hudState.textContent = animState.toUpperCase();
+    lastAnimState = animState;
+  }
+
+  // 3) Smooth follow camera
+  computeCameraTarget();
+  camera.position.lerp(camTargetPos, 1 - Math.exp(-camCfg.followSmoothing * dt));
+  lookTarget.set(position.x, camCfg.lookAtHeight, position.z);
+  camera.lookAt(lookTarget);
+
+  // 4) Remote players: interpolate toward last networked transform
+  const rk = 1 - Math.exp(-12 * dt);
+  for (const r of remotes.values()) {
+    r.current.lerp(r.target, rk);
+    r.currentRot = dampAngle(r.currentRot, r.targetRot, rk);
+    r.agent.setTransform(r.current, r.currentRot);
+    r.agent.update(dt);
+  }
+
+  // 5) Throttled state broadcast (no-op until Supabase is enabled)
+  netAccumulator += dt;
+  if (netAccumulator >= netInterval) {
+    netAccumulator = 0;
+    network.broadcastState({
+      position: { x: position.x, y: position.y, z: position.z },
+      rotationY,
+      animationState: animState,
+      sentAt: Date.now(),
+    });
+  }
+
+  renderer.render(scene, camera);
+}
+frame();
+
+// ── Resize ───────────────────────────────────────────────────────────────────
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
