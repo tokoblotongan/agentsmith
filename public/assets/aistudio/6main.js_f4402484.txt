@@ -1,0 +1,377 @@
+import * as THREE from 'three';
+import { GAME_CONFIG } from './config/gameConfig.js';
+import { createOfficeRoom } from './scene/officeRoom.js';
+import { AgentSmith } from './character/agentSmith.js';
+import { InputController } from './controls/inputController.js';
+import { NetworkSync } from './network/networkSync.js';
+import { Mission } from './game/mission.js';
+import { SpyAudio } from './game/audio.js';
+
+const $ = (id) => document.getElementById(id);
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* private mode */ } },
+};
+
+// ── renderer / scene ─────────────────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, GAME_CONFIG.render.maxPixelRatio));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+$('app').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x080d16);
+const camera = new THREE.PerspectiveCamera(GAME_CONFIG.camera.fov, window.innerWidth / window.innerHeight, .1, 100);
+
+const room = createOfficeRoom(scene);
+const input = new InputController();
+const audio = new SpyAudio();
+const network = new NetworkSync(GAME_CONFIG.network);
+network.connect();
+
+const spawn = GAME_CONFIG.player.spawn;
+const position = new THREE.Vector3(spawn.x, spawn.y, spawn.z);
+let rotationY = spawn.rotationY;
+const agent = new AgentSmith();
+scene.add(agent.group);
+agent.setTransform(position, rotationY);
+agent.setYawOffset(store.get('smith.yaw', GAME_CONFIG.character.modelYawOffset || 0));
+
+// ── mission ──────────────────────────────────────────────────────────────────
+let gameState = 'briefing';
+let level = 1;
+let best = store.get('smith.best', 0);
+let shake = 0;
+
+const mission = new Mission(scene, room, {
+  onIntel: (c, t) => {
+    audio.pickup(); shake = Math.max(shake, .12);
+    toast(`INTEL SECURED ${c}/${t}`);
+    setStatus(`${t - c} dossier(s) left in the room.`, false);
+  },
+  onExit: () => { audio.unlock(); toast('EXTRACTION POINT ACTIVE'); setStatus('All intel secured — reach the green extraction zone.', false); },
+  onAlert: (i) => { audio.alert(i); shake = Math.max(shake, .05 + i * .12); },
+  onAlertState: (on) => { if (on) setStatus('CAMERA LOCK — break line of sight or hide behind cabinets.', true); },
+  onWin: (s) => {
+    gameState = 'won'; audio.win(); shake = .35;
+    if (s.score > best) { best = s.score; store.set('smith.best', best); }
+    showWin(s);
+  },
+  onLose: (s) => { gameState = 'lost'; audio.lose(); shake = .5; showLose(s); },
+});
+
+// ── remote players (dormant until Supabase is enabled) ───────────────────────
+const remotes = new Map();
+network.onRemotePlayerUpdate((m) => {
+  if (!m || m.id === network.playerId) return;
+  let r = remotes.get(m.id);
+  if (!r) {
+    const a = new AgentSmith(); scene.add(a.group);
+    r = { a, cur: new THREE.Vector3(m.position.x, m.position.y, m.position.z), rot: m.rotationY, tgt: new THREE.Vector3(), trot: m.rotationY };
+    remotes.set(m.id, r);
+  }
+  r.tgt.set(m.position.x, m.position.y, m.position.z); r.trot = m.rotationY;
+  r.a.setAnimationState(m.animationState || 'idle');
+});
+
+// ── collision ────────────────────────────────────────────────────────────────
+function circleBox(p, r, b) {
+  const cx = Math.max(b.min.x, Math.min(p.x, b.max.x));
+  const cz = Math.max(b.min.z, Math.min(p.z, b.max.z));
+  const dx = p.x - cx, dz = p.z - cz, d2 = dx * dx + dz * dz;
+  if (d2 >= r * r) return;
+  if (d2 > 1e-8) { const d = Math.sqrt(d2), k = (r - d) / d; p.x += dx * k; p.z += dz * k; }
+  else {
+    const e = [p.x - b.min.x + r, b.max.x - p.x + r, p.z - b.min.z + r, b.max.z - p.z + r];
+    const m = Math.min(...e);
+    if (m === e[0]) p.x = b.min.x - r; else if (m === e[1]) p.x = b.max.x + r;
+    else if (m === e[2]) p.z = b.min.z - r; else p.z = b.max.z + r;
+  }
+}
+function resolve(p) {
+  const r = GAME_CONFIG.player.radius, B = room.bounds;
+  p.x = Math.max(B.minX + r, Math.min(p.x, B.maxX - r));
+  p.z = Math.max(B.minZ + r, Math.min(p.z, B.maxZ - r));
+  for (const b of room.colliders) circleBox(p, r, b);
+}
+
+// ── camera ───────────────────────────────────────────────────────────────────
+const CC = GAME_CONFIG.camera;
+const camTarget = new THREE.Vector3(), lookAt = new THREE.Vector3();
+function cameraTarget() {
+  const fx = Math.sin(rotationY), fz = Math.cos(rotationY);
+  camTarget.set(position.x - fx * CC.distance, CC.height, position.z - fz * CC.distance);
+  const m = CC.wallMargin;
+  camTarget.x = Math.max(room.bounds.minX + m, Math.min(camTarget.x, room.bounds.maxX - m));
+  camTarget.z = Math.max(room.bounds.minZ + m, Math.min(camTarget.z, room.bounds.maxZ - m));
+  camTarget.y = Math.max(.6, Math.min(camTarget.y, GAME_CONFIG.room.height - .25));
+}
+cameraTarget(); camera.position.copy(camTarget);
+function dampAngle(a, b, k) {
+  let d = (b - a) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2; if (d < -Math.PI) d += Math.PI * 2;
+  return a + d * k;
+}
+
+// ── HUD ──────────────────────────────────────────────────────────────────────
+const radar = $('radar').getContext('2d');
+let toastTimer = 0;
+function toast(msg, bad) {
+  const t = $('toast'); t.textContent = msg; t.className = 'on' + (bad ? ' bad' : '');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.className = ''; }, 2400);
+}
+function setStatus(msg, alert) { const s = $('status'); s.textContent = msg; s.className = alert ? 'alert' : ''; }
+function pips(total) {
+  const p = $('pips'); p.innerHTML = '';
+  for (let i = 0; i < total; i++) { const d = document.createElement('div'); d.className = 'pip'; p.appendChild(d); }
+}
+function updateHUD() {
+  const m = mission;
+  const t = Math.max(0, Math.ceil(m.timeLeft));
+  const tv = $('timeVal');
+  tv.textContent = String(Math.floor(t / 60)).padStart(2, '0') + ':' + String(t % 60).padStart(2, '0');
+  tv.className = 'val' + (t <= 15 ? ' crit' : t <= 35 ? ' warn' : '');
+  $('intelVal').textContent = `${m.collected}/${m.total}`;
+  $('scoreVal').textContent = gameState === 'playing' ? (m.collected * 1000) : m.score;
+  $('lvlTag').textContent = `LEVEL ${m.level} · ${m.params_.name}`;
+  const kids = $('pips').children;
+  for (let i = 0; i < kids.length; i++) kids[i].className = 'pip' + (i < m.collected ? ' on' : '');
+  const d = Math.round(m.detection);
+  $('detPct').textContent = d + '%';
+  const f = $('detFill');
+  f.style.width = d + '%';
+  f.className = d > 70 ? 'danger' : d > 35 ? 'caution' : '';
+  $('vignette').style.opacity = String(Math.min(.85, d / 110));
+  $('vignette').className = d > 70 ? 'pulse' : '';
+  $('objective').textContent = gameState !== 'playing'
+    ? 'Mission paused.'
+    : m.collected < m.total
+      ? `Secure ${m.total - m.collected} intel dossier(s). Avoid the camera sweep.`
+      : 'Reach the EXTRACTION zone by the east door.';
+  const mode = agent.getRigMode();
+  $('rigChip').innerHTML = 'RIG <b>' + (mode === 'static' ? 'YOUR GLB' : mode === 'clips' ? 'ANIMATED' : 'PROCEDURAL') + '</b>';
+}
+function drawRadar() {
+  const c = radar, W = 150, H = 150, B = room.bounds;
+  const sx = (x) => (x - B.minX) / (B.maxX - B.minX) * (W - 12) + 6;
+  const sz = (z) => (z - B.minZ) / (B.maxZ - B.minZ) * (H - 12) + 6;
+  c.clearRect(0, 0, W, H);
+  c.fillStyle = '#0b1220'; c.fillRect(0, 0, W, H);
+  c.strokeStyle = '#2a3c56'; c.lineWidth = 1; c.strokeRect(6, 6, W - 12, H - 12);
+  c.fillStyle = '#182437';
+  for (const b of room.colliders) c.fillRect(sx(b.min.x), sz(b.min.z), sx(b.max.x) - sx(b.min.x), sz(b.max.z) - sz(b.min.z));
+  const cm = mission.cam;
+  c.beginPath(); c.moveTo(sx(cm.x), sz(cm.z));
+  const a0 = Math.atan2(Math.sin(cm.yaw - cm.half), Math.cos(cm.yaw - cm.half));
+  const a1 = Math.atan2(Math.sin(cm.yaw + cm.half), Math.cos(cm.yaw + cm.half));
+  c.arc(sx(cm.x), sz(cm.z), cm.reach / (B.maxX - B.minX) * (W - 12), a0 + Math.PI / 2 - Math.PI / 2, a1 + Math.PI / 2 - Math.PI / 2);
+  c.closePath();
+  c.fillStyle = mission.spotted ? 'rgba(255,59,92,.30)' : 'rgba(255,180,84,.18)'; c.fill();
+  for (const it of mission.intel) {
+    if (!it.active) continue;
+    c.beginPath(); c.arc(sx(it.x), sz(it.z), 3.2, 0, 7); c.fillStyle = '#38c6ff'; c.fill();
+  }
+  const E = mission.exitPos;
+  c.beginPath(); c.arc(sx(E.x), sz(E.z), 5, 0, 7);
+  c.strokeStyle = mission.exitActive ? '#a4f45c' : '#5f7089'; c.lineWidth = 2; c.stroke();
+  c.save(); c.translate(sx(position.x), sz(position.z)); c.rotate(-rotationY + Math.PI);
+  c.beginPath(); c.moveTo(0, -6); c.lineTo(4.5, 5); c.lineTo(-4.5, 5); c.closePath();
+  c.fillStyle = '#ece7db'; c.fill(); c.restore();
+}
+
+// ── overlays ─────────────────────────────────────────────────────────────────
+function overlay(html) { $('card').innerHTML = html; $('overlay').classList.remove('hide'); }
+function hideOverlay() { $('overlay').classList.add('hide'); }
+function showBriefing() {
+  const P = mission.params(level);
+  overlay(`
+    <div class="kicker">CLASSIFIED · MISSION BRIEF</div>
+    <h2>Operation Nightdesk</h2>
+    <p>You are <b>Agent Smith</b>. Infiltrate the executive office, secure <b>${P.intel} intel dossiers</b>,
+    then reach the <b>extraction zone</b> by the east door before the clock runs out.</p>
+    <p>A ceiling camera sweeps the room. Standing in its beam raises <b>detection</b> — sprinting is loud and
+    raises it <b>${GAME_CONFIG.mission.sprintNoise}× faster</b>. Break line of sight behind the filing cabinets,
+    or stand still to cool down. At 100% you are busted.</p>
+    <div class="keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><kbd>↑↓←→</kbd><kbd>SHIFT sprint</kbd><kbd>R restart</kbd><kbd>M mute</kbd></div>
+    <div id="stats">
+      <div class="stat"><div class="k">DIFFICULTY</div><div class="v">${P.name}</div></div>
+      <div class="stat"><div class="k">TIME LIMIT</div><div class="v">${P.time}s</div></div>
+      <div class="stat"><div class="k">BEST SCORE</div><div class="v gold">${best}</div></div>
+    </div>
+    <div id="cardBtns"><button class="primary" data-act="start">DEPLOY AGENT</button></div>`);
+}
+function showWin(s) {
+  overlay(`
+    <div class="kicker">EXTRACTION CONFIRMED</div>
+    <h2 class="win">Mission Complete</h2>
+    <p>All <b>${s.intel} dossiers</b> recovered and delivered. Handler is pleased, Agent.</p>
+    <div id="stats">
+      <div class="stat"><div class="k">RANK</div><div class="v green">${s.rank}</div></div>
+      <div class="stat"><div class="k">SCORE</div><div class="v gold">${s.score}</div></div>
+      <div class="stat"><div class="k">TIME LEFT</div><div class="v">${s.timeLeft}s</div></div>
+      <div class="stat"><div class="k">DETECTION</div><div class="v">${s.detection}%</div></div>
+      <div class="stat"><div class="k">BEST</div><div class="v gold">${best}</div></div>
+    </div>
+    <div id="cardBtns">
+      <button class="primary" data-act="next">NEXT MISSION · LEVEL ${s.level + 1}</button>
+      <button data-act="retry">REPLAY LEVEL ${s.level}</button>
+    </div>`);
+}
+function showLose(s) {
+  const busted = s.reason === 'BUSTED';
+  overlay(`
+    <div class="kicker">MISSION ABORTED</div>
+    <h2 class="lose">${busted ? 'Cover Blown' : 'Time Expired'}</h2>
+    <p>${busted
+      ? 'Security locked onto you. Break the camera beam earlier — cabinets block its line of sight, and standing still cools detection fastest.'
+      : 'The window closed before extraction. Sprint between dossiers, but remember sprinting is loud inside the beam.'}</p>
+    <div id="stats">
+      <div class="stat"><div class="k">INTEL</div><div class="v">${s.collected}/${s.total}</div></div>
+      <div class="stat"><div class="k">SCORE</div><div class="v gold">${s.score}</div></div>
+      <div class="stat"><div class="k">LEVEL</div><div class="v">${s.level}</div></div>
+      <div class="stat"><div class="k">BEST</div><div class="v gold">${best}</div></div>
+    </div>
+    <div id="cardBtns">
+      <button class="primary" data-act="retry">RETRY MISSION</button>
+      <button data-act="brief">CHANGE DIFFICULTY</button>
+    </div>`);
+}
+$('card').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-act]'); if (!b) return;
+  audio.ensure(); audio.ui();
+  const a = b.dataset.act;
+  if (a === 'start' || a === 'retry') start(level);
+  else if (a === 'next') start(level + 1);
+  else if (a === 'brief') { gameState = 'briefing'; showBriefing(); }
+});
+
+function start(lv) {
+  level = Math.max(1, lv);
+  mission.reset(level);
+  position.set(spawn.x, spawn.y, spawn.z); rotationY = spawn.rotationY;
+  agent.setTransform(position, rotationY); agent.setAnimationState('idle');
+  pips(mission.total);
+  cameraTarget(); camera.position.copy(camTarget);
+  gameState = 'playing'; hideOverlay();
+  setStatus('Move out. The camera is sweeping.', false);
+  toast(`LEVEL ${level} · ${mission.params_.name}`);
+  audio.ensure();
+}
+
+// ── controls / UI ────────────────────────────────────────────────────────────
+const touch = { f: 0, b: 0, l: 0, r: 0, s: 0 };
+if (window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window) $('touch').classList.add('on');
+$('touch').querySelectorAll('[data-k]').forEach((b) => {
+  const k = b.dataset.k;
+  const on = (e) => { e.preventDefault(); touch[k] = 1; audio.ensure(); };
+  const off = (e) => { e.preventDefault(); touch[k] = 0; };
+  b.addEventListener('pointerdown', on); b.addEventListener('pointerup', off);
+  b.addEventListener('pointerleave', off); b.addEventListener('pointercancel', off);
+});
+$('audioBtn').addEventListener('click', () => {
+  audio.ensure(); audio.setMuted(!audio.muted);
+  const b = $('audioBtn'); b.textContent = audio.muted ? 'AUDIO OFF' : 'AUDIO ON';
+  b.className = 'btn' + (audio.muted ? '' : ' on');
+  if (!audio.muted) audio.ui();
+});
+$('diffSel').addEventListener('change', () => { audio.ensure(); audio.ui(); start(+$('diffSel').value); });
+$('restartBtn').addEventListener('click', () => { audio.ensure(); audio.ui(); start(level); });
+$('flipBtn').addEventListener('click', () => {
+  audio.ensure(); audio.ui();
+  store.set('smith.yaw', agent.flipFacing());
+  toast('MODEL FACING FLIPPED');
+});
+$('swapBtn').addEventListener('click', () => {
+  audio.ensure(); audio.ui();
+  if (!agent.hasExternal()) { toast('NO GLB LOADED — assets/agent.glb', true); return; }
+  const useProc = agent.getRigMode() !== 'procedural';
+  agent.useExternal(!useProc);
+  toast(useProc ? 'PROCEDURAL BODY' : 'YOUR GLB MODEL');
+});
+window.addEventListener('keydown', (e) => {
+  audio.ensure();
+  if (e.code === 'KeyR') { start(level); }
+  else if (e.code === 'KeyM') { $('audioBtn').click(); }
+  else if (e.code === 'Enter' || e.code === 'Space') {
+    if (gameState !== 'playing') { e.preventDefault(); const p = $('card').querySelector('.primary'); if (p) p.click(); }
+  }
+});
+window.addEventListener('pointerdown', () => audio.ensure(), { once: true });
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ── loop ─────────────────────────────────────────────────────────────────────
+const clock = new THREE.Clock();
+let netAcc = 0, hudAcc = 0;
+const netInterval = 1 / GAME_CONFIG.network.tickRate;
+
+function frame() {
+  requestAnimationFrame(frame);
+  const dt = Math.min(clock.getDelta(), .05);
+  const P = GAME_CONFIG.player;
+  const playing = gameState === 'playing';
+
+  const k = input.getIntent();
+  const intent = playing ? {
+    forward: Math.max(-1, Math.min(1, k.forward + touch.f - touch.b)),
+    turn: Math.max(-1, Math.min(1, k.turn + touch.l - touch.r)),
+    sprint: k.sprint || touch.s === 1,
+  } : { forward: 0, turn: 0, sprint: false };
+
+  if (playing) {
+    rotationY += intent.turn * P.turnSpeed * dt;
+    let sp = intent.sprint ? P.runSpeed : P.walkSpeed;
+    if (intent.forward < 0) sp *= P.backwardFactor;
+    position.x += Math.sin(rotationY) * intent.forward * sp * dt;
+    position.z += Math.cos(rotationY) * intent.forward * sp * dt;
+    resolve(position);
+  }
+
+  const moving = intent.forward !== 0;
+  const state = moving ? (intent.sprint ? 'run' : 'walk') : 'idle';
+  agent.setTransform(position, rotationY);
+  agent.setAnimationState(state, intent.forward < 0 ? -1 : 1);
+  agent.update(dt);
+  if (agent.consumeFootstep()) audio.footstep(intent.sprint);
+
+  mission.update(dt, position, moving, intent.sprint, playing);
+
+  cameraTarget();
+  camera.position.lerp(camTarget, 1 - Math.exp(-CC.followSmoothing * dt));
+  if (shake > 0.001) {
+    shake = Math.max(0, shake - dt * 1.6);
+    camera.position.x += (Math.random() - .5) * shake * .5;
+    camera.position.y += (Math.random() - .5) * shake * .4;
+  }
+  lookAt.set(position.x, CC.lookAtHeight, position.z);
+  camera.lookAt(lookAt);
+
+  const rk = 1 - Math.exp(-12 * dt);
+  for (const r of remotes.values()) {
+    r.cur.lerp(r.tgt, rk); r.rot = dampAngle(r.rot, r.trot, rk);
+    r.a.setTransform(r.cur, r.rot); r.a.update(dt);
+  }
+
+  netAcc += dt;
+  if (netAcc >= netInterval) {
+    netAcc = 0;
+    network.broadcastState({ position: { x: position.x, y: position.y, z: position.z }, rotationY, animationState: state, sentAt: Date.now() });
+  }
+  hudAcc += dt;
+  if (hudAcc >= .08) { hudAcc = 0; updateHUD(); drawRadar(); }
+
+  renderer.render(scene, camera);
+}
+
+pips(mission.total);
+updateHUD(); drawRadar();
+showBriefing();
+frame();

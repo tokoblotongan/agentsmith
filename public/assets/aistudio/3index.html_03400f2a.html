@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+<title>AGENT SMITH · Operation Nightdesk</title>
+<style>
+  :root{
+    --navy:#080d16; --navy2:#0d1522; --surface:#121c2b; --surface2:#1a2637; --line:#2a3c56;
+    --ink:#ece7db; --dim:#93a3b8; --faint:#5f7089;
+    --amber:#ffb454; --cyan:#38c6ff; --acid:#a4f45c; --danger:#ff3b5c; --magenta:#ff4fd8;
+    --ok:#3ddc91; --warn:#ffb454; --info:#38c6ff;
+    --mono:ui-monospace,"Cascadia Mono",Consolas,"Courier New",monospace;
+    --sans:system-ui,"Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--navy);color:var(--ink);font-family:var(--sans)}
+  canvas{display:block}
+  #app{position:fixed;inset:0}
+  #grain{position:fixed;inset:0;pointer-events:none;z-index:2;opacity:.06;mix-blend-mode:overlay;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E")}
+  #vignette{position:fixed;inset:0;pointer-events:none;z-index:3;opacity:0;transition:opacity .25s;
+    background:radial-gradient(ellipse at center, transparent 42%, rgba(255,59,92,.55) 100%)}
+  #vignette.pulse{animation:vp .7s ease-in-out infinite}
+  @keyframes vp{0%,100%{filter:none}50%{filter:brightness(1.5)}}
+  .hud{position:fixed;z-index:5;pointer-events:none}
+  .panel{background:linear-gradient(150deg,rgba(18,28,43,.92),rgba(10,16,26,.88));
+    border:1px solid var(--line);border-radius:11px;backdrop-filter:blur(9px);
+    box-shadow:0 10px 34px rgba(0,0,0,.5)}
+  #tl{top:14px;left:14px;padding:12px 15px;min-width:250px;animation:sl .5s cubic-bezier(.2,.9,.25,1) both}
+  @keyframes sl{from{opacity:0;transform:translateX(-16px)}to{opacity:1;transform:none}}
+  #tl h1{margin:0 0 2px;font-size:13px;letter-spacing:2.6px;font-weight:800}
+  #tl h1 b{color:var(--amber)}
+  #tl .sub{font-family:var(--mono);font-size:9.5px;letter-spacing:1.6px;color:var(--faint);margin-bottom:9px}
+  #objective{font-size:11.5px;color:var(--cyan);letter-spacing:.4px;margin-bottom:9px;line-height:1.5;min-height:32px}
+  .meters{display:flex;gap:14px;align-items:center}
+  .meter{font-family:var(--mono)}
+  .meter .lab{font-size:8.5px;letter-spacing:1.6px;color:var(--faint)}
+  .meter .val{font-size:19px;font-weight:700;letter-spacing:1px}
+  #timeVal.warn{color:var(--warn)} #timeVal.crit{color:var(--danger);animation:bl .6s steps(2) infinite}
+  @keyframes bl{50%{opacity:.35}}
+  #pips{display:flex;gap:4px;margin-top:3px}
+  .pip{width:13px;height:5px;border-radius:2px;background:var(--surface2);border:1px solid var(--line)}
+  .pip.on{background:linear-gradient(90deg,var(--cyan),var(--acid));border-color:transparent;box-shadow:0 0 8px rgba(56,198,255,.6)}
+  #tr{top:14px;right:14px;display:flex;flex-direction:column;gap:8px;align-items:flex-end;pointer-events:auto;
+    animation:sr .5s .06s cubic-bezier(.2,.9,.25,1) both}
+  @keyframes sr{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}
+  .cluster{display:flex;gap:6px;padding:8px 9px;align-items:center}
+  button.btn,select.sel{font-family:var(--mono);font-size:10px;letter-spacing:1.1px;cursor:pointer;
+    background:var(--surface2);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:7px 10px;transition:all .15s}
+  button.btn:hover,select.sel:hover{border-color:var(--amber);color:var(--amber);transform:translateY(-1px)}
+  button.btn.on{background:linear-gradient(120deg,var(--amber),var(--cyan));color:#080d16;border-color:transparent;font-weight:700}
+  button.btn.live{background:linear-gradient(120deg,var(--acid),var(--cyan));color:#080d16;border-color:transparent;font-weight:700}
+  button.btn.warn{border-color:rgba(255,59,92,.5);color:var(--danger)}
+  #rigChip{font-family:var(--mono);font-size:9.5px;letter-spacing:1.1px;color:var(--faint);padding:7px 4px 7px 10px}
+  #rigChip b{color:var(--acid)}
+  #faceRow{display:flex;flex-direction:column;gap:6px;padding:9px 11px;width:262px}
+  #faceRow .top{display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);font-size:9px;letter-spacing:1.5px;color:var(--faint)}
+  #faceVal{color:var(--cyan);font-size:11px}
+  #faceRange{-webkit-appearance:none;appearance:none;width:100%;height:4px;border-radius:3px;outline:none;margin:2px 0;
+    background:linear-gradient(90deg,var(--magenta),var(--amber),var(--cyan))}
+  #faceRange::-webkit-slider-thumb{-webkit-appearance:none;width:15px;height:15px;border-radius:50%;background:var(--ink);
+    border:3px solid var(--amber);cursor:pointer;box-shadow:0 0 10px rgba(255,180,84,.6)}
+  #faceRange::-moz-range-thumb{width:13px;height:13px;border-radius:50%;background:var(--ink);border:3px solid var(--amber);cursor:pointer}
+  #faceRow .btns{display:flex;gap:5px}
+  #faceRow .btns button{flex:1;padding:6px 4px;font-size:9.5px}
+  #bl{bottom:14px;left:14px;padding:11px 14px;width:262px;animation:sl .5s .1s cubic-bezier(.2,.9,.25,1) both}
+  #bl .lab{font-family:var(--mono);font-size:8.5px;letter-spacing:1.8px;color:var(--faint);display:flex;justify-content:space-between}
+  #detTrack{height:7px;border-radius:4px;background:var(--surface2);border:1px solid var(--line);margin:6px 0 7px;overflow:hidden}
+  #detFill{height:100%;width:0%;border-radius:3px;background:linear-gradient(90deg,var(--cyan),var(--acid));transition:width .12s,background .3s}
+  #detFill.caution{background:linear-gradient(90deg,var(--amber),var(--magenta))}
+  #detFill.danger{background:linear-gradient(90deg,var(--danger),var(--magenta));box-shadow:0 0 12px rgba(255,59,92,.7)}
+  #status{font-size:11px;color:var(--dim);letter-spacing:.3px;min-height:30px;line-height:1.45}
+  #status.alert{color:var(--danger);font-weight:600}
+  #status.good{color:var(--acid)}
+  #br{bottom:14px;right:14px;padding:9px;animation:sr .5s .1s cubic-bezier(.2,.9,.25,1) both}
+  #radar{display:block;border-radius:7px}
+  #inspectBar{position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:6;display:none;
+    padding:9px 16px;font-family:var(--mono);font-size:10.5px;letter-spacing:1.4px;color:var(--acid);text-align:center;line-height:1.6}
+  #inspectBar.on{display:block}
+  #inspectBar b{color:var(--ink)}
+  #toast{position:fixed;left:50%;top:84px;transform:translateX(-50%) translateY(-12px);z-index:8;opacity:0;
+    pointer-events:none;font-family:var(--mono);font-size:11.5px;letter-spacing:1.2px;padding:9px 16px;border-radius:8px;
+    background:rgba(18,28,43,.95);border:1px solid var(--acid);color:var(--acid);transition:all .25s;text-align:center;max-width:86vw}
+  #toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+  #toast.bad{border-color:var(--danger);color:var(--danger)}
+  #overlay{position:fixed;inset:0;z-index:10;display:flex;align-items:center;justify-content:center;padding:20px;
+    background:radial-gradient(ellipse at 50% 40%, rgba(13,21,34,.86), rgba(6,10,17,.96));backdrop-filter:blur(6px)}
+  #overlay.hide{display:none}
+  #card{width:min(580px,94vw);max-height:88vh;overflow-y:auto;padding:26px 28px;animation:pop .45s cubic-bezier(.2,.9,.25,1) both}
+  @keyframes pop{from{opacity:0;transform:translateY(18px) scale(.97)}to{opacity:1;transform:none}}
+  #card::-webkit-scrollbar{width:9px}
+  #card::-webkit-scrollbar-track{background:var(--navy2);border-radius:5px}
+  #card::-webkit-scrollbar-thumb{background:linear-gradient(var(--amber),var(--cyan));border-radius:5px;border:2px solid var(--navy2)}
+  #card{scrollbar-width:thin;scrollbar-color:var(--amber) var(--navy2)}
+  #card .kicker{font-family:var(--mono);font-size:9.5px;letter-spacing:3px;color:var(--amber);margin-bottom:8px}
+  #card h2{margin:0 0 10px;font-size:27px;letter-spacing:1.4px;line-height:1.15}
+  #card h2.win{color:var(--acid)} #card h2.lose{color:var(--danger)}
+  #card p{margin:0 0 14px;font-size:13px;line-height:1.75;color:var(--dim)}
+  #card p b{color:var(--ink)}
+  #stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:9px;margin:0 0 16px}
+  .stat{border:1px solid var(--line);border-radius:9px;padding:9px 11px;background:var(--surface2)}
+  .stat .k{font-family:var(--mono);font-size:8.5px;letter-spacing:1.5px;color:var(--faint)}
+  .stat .v{font-family:var(--mono);font-size:18px;font-weight:700;color:var(--cyan)}
+  .stat .v.gold{color:var(--amber)} .stat .v.green{color:var(--acid)}
+  #cardBtns{display:flex;gap:9px;flex-wrap:wrap}
+  #cardBtns button{flex:1;min-width:130px;font-family:var(--mono);font-size:11.5px;letter-spacing:1.4px;font-weight:700;
+    cursor:pointer;padding:12px 14px;border-radius:9px;border:1px solid var(--line);background:var(--surface2);color:var(--ink);transition:all .15s}
+  #cardBtns button:hover{transform:translateY(-2px);border-color:var(--cyan);color:var(--cyan)}
+  #cardBtns button.primary{background:linear-gradient(120deg,var(--amber),var(--cyan));color:#080d16;border:none;box-shadow:0 0 22px rgba(255,180,84,.3)}
+  #cardBtns button.primary:hover{color:#080d16;box-shadow:0 0 32px rgba(56,198,255,.5)}
+  .keys{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:16px}
+  kbd{font-family:var(--mono);font-size:10px;background:var(--surface2);border:1px solid var(--line);
+    border-bottom-width:2px;border-radius:5px;padding:3px 7px;color:var(--dim)}
+  #touch{position:fixed;inset:auto 0 0 0;z-index:7;display:none;justify-content:space-between;padding:0 16px 96px;pointer-events:none}
+  #touch.on{display:flex}
+  .pad{display:grid;grid-template-columns:repeat(3,54px);grid-template-rows:repeat(2,54px);gap:7px;pointer-events:auto}
+  .pad button,.sprintBtn{border-radius:12px;border:1px solid var(--line);background:rgba(26,38,55,.85);color:var(--ink);
+    font-size:19px;font-family:var(--mono);cursor:pointer;backdrop-filter:blur(6px)}
+  .pad button:active,.sprintBtn:active{background:linear-gradient(120deg,var(--amber),var(--cyan));color:#080d16}
+  .sprintBtn{pointer-events:auto;width:82px;height:82px;align-self:flex-end;font-size:11px;letter-spacing:1.4px;font-weight:700}
+  @media (max-width:860px){
+    #tl{min-width:0;width:calc(100vw - 28px);padding:10px 12px}
+    #tr{top:auto;bottom:calc(14px + 150px);right:14px}
+    #faceRow{width:238px}
+    #bl{width:calc(100vw - 28px);bottom:14px}
+    #br{display:none}
+    #card{padding:20px} #card h2{font-size:22px}
+    #inspectBar{top:auto;bottom:calc(14px + 260px);width:calc(100vw - 28px)}
+  }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="app"></div>
+<div id="grain"></div>
+<div id="vignette"></div>
+
+<div class="hud panel" id="tl">
+  <h1>AGENT <b>SMITH</b></h1>
+  <div class="sub">OPERATION NIGHTDESK · <span id="lvlTag">LEVEL 1</span></div>
+  <div id="objective">Awaiting deployment…</div>
+  <div class="meters">
+    <div class="meter"><div class="lab">TIME</div><div class="val" id="timeVal">--</div></div>
+    <div class="meter"><div class="lab">INTEL</div><div class="val" id="intelVal">0/0</div><div id="pips"></div></div>
+    <div class="meter"><div class="lab">SCORE</div><div class="val" id="scoreVal">0</div></div>
+  </div>
+</div>
+
+<div class="hud" id="tr">
+  <div class="panel cluster">
+    <button class="btn on" id="audioBtn">AUDIO ON</button>
+    <select class="sel" id="diffSel">
+      <option value="1">RECRUIT</option>
+      <option value="2">AGENT</option>
+      <option value="3">PHANTOM</option>
+    </select>
+    <button class="btn warn" id="restartBtn">RESTART</button>
+  </div>
+  <div class="panel cluster">
+    <span id="rigChip">RIG <b>PROCEDURAL</b></span>
+    <button class="btn" id="inspectBtn">INSPECT</button>
+    <button class="btn" id="swapBtn">SWAP</button>
+  </div>
+  <div class="panel" id="faceRow">
+    <div class="top"><span>FACING CALIBRATION</span><span id="faceVal">0°</span></div>
+    <input id="faceRange" type="range" min="-180" max="180" step="1" value="0">
+    <div class="btns">
+      <button class="btn" id="faceM15">−15°</button>
+      <button class="btn" id="faceP15">+15°</button>
+      <button class="btn" id="face180">180°</button>
+      <button class="btn" id="face0">0°</button>
+    </div>
+  </div>
+</div>
+
+<div class="hud panel" id="bl">
+  <div class="lab"><span>DETECTION</span><span id="detPct">0%</span></div>
+  <div id="detTrack"><div id="detFill"></div></div>
+  <div id="status">Standing by.</div>
+</div>
+
+<div class="hud panel" id="br"><canvas id="radar" width="150" height="150"></canvas></div>
+<div class="hud panel" id="inspectBar">INSPECT MODE — mission paused · <b>DRAG</b> orbit · <b>WHEEL</b> zoom · slide <b>FACING</b> until his nose points where he walks</div>
+<div id="toast"></div>
+
+<div id="touch">
+  <div class="pad">
+    <span></span><button data-k="f">▲</button><span></span>
+    <button data-k="l">◀</button><button data-k="b">▼</button><button data-k="r">▶</button>
+  </div>
+  <button class="sprintBtn" data-k="s">SPRINT</button>
+</div>
+
+<div id="overlay"><div class="panel" id="card"></div></div>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

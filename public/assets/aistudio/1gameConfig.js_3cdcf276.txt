@@ -1,0 +1,63 @@
+export const GAME_CONFIG = {
+  room: { width: 16, depth: 12, height: 4, wallThickness: 0.2 },
+
+  player: {
+    radius: 0.35,
+    walkSpeed: 2.4,
+    runSpeed: 5.0,
+    backwardFactor: 0.6,
+    turnSpeed: 2.7,
+    spawn: { x: 0, y: 0, z: 3.4, rotationY: Math.PI },
+  },
+
+  camera: {
+    fov: 60, distance: 4.2, height: 2.15, lookAtHeight: 1.45,
+    followSmoothing: 6.5, wallMargin: 0.3,
+  },
+
+  animation: { walkFrequency: 7.6, runFrequency: 11.6, blendSpeed: 12 },
+
+  render: { maxPixelRatio: 1.5, shadowMapSize: 1024 },
+
+  character: {
+    detail: 1.5,
+    modelUrl: './assets/agentsmith.glb',
+    modelHeight: 1.87,
+    modelYawOffset: 0,
+    // Procedural limb deformation for static (unrigged) scans.
+    deform: {
+      enabled: true,
+      swing: 1.0,
+      arm: 1.0,
+      knee: 0.9,
+      twist: 0.11,
+      sway: 1.35,
+      lean: 0.9,
+      bob: 0.6,
+    },
+    fbxIdle: '', fbxWalk: '', fbxRun: '', textureUrl: '',
+  },
+
+  mission: {
+    intelSpots: [
+      [-6.2, -1.2], [-5.0, 4.2], [5.6, -4.4], [6.4, 4.6],
+      [-2.6, -5.0], [3.2, 0.4], [-6.8, 2.6], [2.2, -5.2],
+    ],
+    exit: { x: 7.0, z: 3.7, radius: 1.05 },
+    pickupRadius: 0.85,
+    camera: { x: 0, y: 3.25, z: -5.55, range: 1.02, halfAngle: 0.36, reach: 9.5 },
+    levels: [
+      { name: 'RECRUIT', intel: 4, time: 150, sweep: 0.34, detect: 22 },
+      { name: 'AGENT',   intel: 5, time: 120, sweep: 0.50, detect: 30 },
+      { name: 'PHANTOM', intel: 6, time: 95,  sweep: 0.68, detect: 40 },
+    ],
+    sprintNoise: 2.2,
+    stillFactor: 0.45,
+    decay: 19,
+  },
+
+  network: {
+    enabled: false, tickRate: 10, channelName: 'spy-office:room-01',
+    supabaseUrl: 'YOUR_SUPABASE_URL', supabaseAnonKey: 'YOUR_SUPABASE_ANON_KEY',
+  },
+};
